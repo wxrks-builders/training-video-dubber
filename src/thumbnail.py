@@ -366,3 +366,38 @@ def _wrap_plain(draw, text, font, max_w) -> list:
     if cur:
         lines.append(cur)
     return lines
+
+
+# ── Contact sheet for picking between variants in Slack ───────────────────────
+
+def contact_sheet(thumb_paths: list, output_path: str, scale: float = 0.52) -> str:
+    """
+    Lay the candidate thumbnails out in a numbered row so they can be compared
+    side by side in a single Slack image — three separate uploads scroll apart
+    and are much harder to judge against each other.
+    """
+    gap, pad, label_h = 26, 30, 62
+    tw, th = int(W * scale), int(H * scale)
+    n = len(thumb_paths)
+
+    sheet_w = pad * 2 + tw * n + gap * (n - 1)
+    sheet_h = pad * 2 + th + label_h
+    sheet = Image.new("RGB", (sheet_w, sheet_h), (12, 12, 12))
+    draw = ImageDraw.Draw(sheet)
+    num_f = _font("SemiBold", 30)
+
+    for i, path in enumerate(thumb_paths):
+        x = pad + i * (tw + gap)
+        thumb = Image.open(path).convert("RGB").resize((tw, th), Image.LANCZOS)
+        sheet.paste(thumb, (x, pad + label_h))
+        draw.rectangle([x, pad + label_h, x + tw - 1, pad + label_h + th - 1],
+                       outline=(48, 52, 50), width=1)
+
+        badge = 42
+        draw.ellipse([x, pad + 4, x + badge, pad + 4 + badge], fill=(16, 185, 129))
+        label = str(i + 1)
+        lw = draw.textbbox((0, 0), label, font=num_f)[2]
+        draw.text((x + (badge - lw) / 2, pad + 8), label, font=num_f, fill=(0, 0, 0))
+
+    sheet.save(output_path, "PNG")
+    return output_path

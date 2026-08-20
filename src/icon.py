@@ -7,6 +7,7 @@ carrying a rectangle of near-black with it.
 """
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import requests
@@ -69,3 +70,32 @@ def generate_icon(
     with open(output_path, "wb") as fh:
         fh.write(base64.b64decode(data["b64_json"]))
     return output_path
+
+
+def generate_icons(
+    subjects: list,
+    api_key: str,
+    output_dir: str,
+    stem: str,
+    quality: str = "medium",
+) -> list:
+    """
+    Render one icon per subject, concurrently — three in sequence would be two
+    minutes of the pipeline sitting idle.
+
+    Returns [(subject, path), ...] for the ones that succeeded, in input order.
+    """
+    def one(idx_subject):
+        idx, subject = idx_subject
+        path = str(Path(output_dir) / f"{stem}_icon{idx + 1}.png")
+        return subject, generate_icon(subject, api_key, path, quality=quality)
+
+    results = []
+    with ThreadPoolExecutor(max_workers=len(subjects) or 1) as pool:
+        futures = [pool.submit(one, item) for item in enumerate(subjects)]
+        for f in futures:
+            try:
+                results.append(f.result())
+            except Exception:
+                results.append(None)
+    return [r for r in results if r]

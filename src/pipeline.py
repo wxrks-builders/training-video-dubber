@@ -1,12 +1,13 @@
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 from src import circle
 from src.describe import generate_video_copy
-from src.icon import generate_icon
+from src.icon import generate_icons
 from src.download_loom import download_loom
 from src.download_slack import download_slack_file
 from src.elevenlabs_dub import (
@@ -19,7 +20,7 @@ from src.elevenlabs_dub import (
 )
 from src.outro import append_outro
 from src.quiz import draft_quiz_questions
-from src.thumbnail import generate_thumbnail
+from src.thumbnail import contact_sheet, generate_thumbnail
 from src.transcribe import has_usable_audio, transcribe_video
 from src.translate_title import translate_title
 from src.vimeo_upload import upload_to_vimeo
@@ -71,6 +72,7 @@ def run_pipeline(
     circle_section_id: int = None,
     draft_quiz: bool = False,
     ask_description=None,
+    choose_thumbnail=None,
     log=print,
 ) -> dict:
     """
@@ -201,11 +203,11 @@ def run_pipeline(
     description = copy.get("description") or title
     thumbnail_headline = copy.get("thumbnail_headline") or title
     thumbnail_subline = copy.get("thumbnail_subline") or ""
-    icon_subject = copy.get("icon_subject") or ""
+    icon_subjects = copy.get("icon_subjects") or []
     log(f"      Title : {title}")
     log(f"      Desc  : {description!r}")
     log(f"      Thumb : {thumbnail_headline!r} / {thumbnail_subline!r}")
-    log(f"      Icon  : {icon_subject!r}")
+    log(f"      Icons : {icon_subjects}")
 
     # ── 7. Upload to Vimeo ────────────────────────────────────────────────────
     log("[7/8] Uploading to Vimeo ...")
@@ -257,24 +259,43 @@ def run_pipeline(
             log("[8/8] Generating thumbnail and uploading to YouTube ...")
 
             # A missing icon costs the thumbnail its subject, not the publish.
-            icon_path = None
-            if openai_key and icon_subject:
-                try:
-                    icon_path = generate_icon(
-                        icon_subject, openai_key,
-                        str(Path("dubbed") / f"{video['stem']}_icon.png"),
-                    )
-                    log(f"      Icon: {icon_path}")
-                except Exception as exc:
-                    log(f"      Icon generation failed ({exc}); using the default shape.")
+            icons = []
+            if openai_key and icon_subjects:
+                icons = generate_icons(
+                    icon_subjects, openai_key, "dubbed", video["stem"],
+                )
+                log(f"      {len(icons)}/{len(icon_subjects)} icons generated.")
             elif not openai_key:
                 log("      OPENAI_API_KEY not set — using the default icon shape.")
 
             thumbnail_path = str(Path("dubbed") / f"{video['stem']}_thumb.jpg")
-            generate_thumbnail(
-                thumbnail_headline, thumbnail_path,
-                subline=thumbnail_subline, icon_path=icon_path,
-            )
+            icon_paths = [p for _, p in icons] or [None]
+
+            # Each render may call the style registry, so run them concurrently
+            # rather than paying that round trip once per candidate.
+            def _render(indexed_path):
+                i, ipath = indexed_path
+                out = str(Path("dubbed") / f"{video['stem']}_thumb{i + 1}.jpg")
+                return generate_thumbnail(
+                    thumbnail_headline, out,
+                    subline=thumbnail_subline, icon_path=ipath, log=lambda *a: None,
+                )
+
+            with ThreadPoolExecutor(max_workers=max(1, len(icon_paths))) as pool:
+                candidates = list(pool.map(_render, enumerate(icon_paths)))
+
+            chosen = 0
+            if choose_thumbnail and len(candidates) > 1:
+                sheet = str(Path("dubbed") / f"{video['stem']}_options.png")
+                contact_sheet(candidates, sheet)
+                try:
+                    chosen = choose_thumbnail(sheet, len(candidates))
+                except Exception as exc:
+                    log(f"      Thumbnail pick failed ({exc}); using the first.")
+                    chosen = 0
+                chosen = max(0, min(chosen, len(candidates) - 1))
+
+            os.replace(candidates[chosen], thumbnail_path)
             log(f"      Thumbnail: {thumbnail_path}")
             # Standalone videos are regular uploads — never added to a course playlist.
             playlist_id = _playlist_for(circle_space_id, yt_playlist_id) if series else None

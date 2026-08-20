@@ -28,8 +28,8 @@ def generate_video_copy(
     Either way the same recipe produces the title, description and thumbnail text.
 
     Returns title, description, thumbnail_headline (with *asterisks* marking the
-    words to set bold), thumbnail_subline, and icon_subject for the thumbnail
-    illustration.
+    words to set bold), thumbnail_subline, and icon_subjects — three candidate
+    illustrations to choose between.
     The source is truncated because titles and descriptions are decided in the
     first few minutes, and the whole thing is needlessly expensive for Haiku.
     """
@@ -77,11 +77,13 @@ def generate_video_copy(
                     'them for bold, e.g. "*Bulk import* glossary terms". Not all caps.\n'
                     '4. "thumbnail_subline": one short supporting line for the thumbnail, '
                     "under 60 characters, sentence case, no full stop.\n"
-                    '5. "icon_subject": a single concrete object or simple visual metaphor '
-                    "for this video, described in under 12 words, that an illustrator could "
-                    'draw as one icon — e.g. "a funnel filtering documents into a neat stack". '
-                    "No text or letters in it, no people, and do not mention colours — "
-                    "the icon is always rendered in the brand's greens.\n\n"
+                    '5. "icon_subjects": an array of exactly 3 distinct concrete objects or '
+                    "simple visual metaphors for this video, each under 12 words, each one "
+                    "something an illustrator could draw as a single icon — e.g. "
+                    '"a funnel filtering documents into a neat stack". Make the three '
+                    "genuinely different takes, not variations of the same object. No text "
+                    "or letters in them, no people, and do not mention colours — the icon is "
+                    "always rendered in the brand's greens.\n\n"
                     "Return ONLY the JSON object, no markdown or explanation."
                 ),
             }],
@@ -100,5 +102,5 @@ def generate_video_copy(
             copy.get("thumbnail_headline", "").strip()),
         "thumbnail_subline": _enforce_company_name(
             copy.get("thumbnail_subline", "").strip()),
-        "icon_subject": copy.get("icon_subject", "").strip(),
+        "icon_subjects": [str(x).strip() for x in (copy.get("icon_subjects") or []) if str(x).strip()],
     }

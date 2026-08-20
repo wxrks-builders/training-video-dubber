@@ -33,9 +33,12 @@ gray on one line), an extra-light subline, an arrow cue and the wxrks wordmark.
 
 The headline, subline and icon subject all come from the same copy step as the title
 ([src/describe.py](src/describe.py)); asterisks in the headline mark the words set in
-bold. The icon is generated per video with `gpt-image-1`
-([src/icon.py](src/icon.py)) on a transparent background. If `OPENAI_API_KEY` is unset
-or generation fails, a built-in glass shape is used and the video still publishes.
+bold. Three icons are generated per video with `gpt-image-1` ([src/icon.py](src/icon.py)) on
+transparent backgrounds, concurrently. The three candidate thumbnails are posted to the
+Slack thread as one numbered contact sheet and whoever posted the video picks one; after
+30 minutes with no pick, option 1 is used and the video publishes anyway. If
+`OPENAI_API_KEY` is unset or generation fails, a built-in glass shape is used and there
+is nothing to choose between.
 
 Assets live in `assets/` — `logo.png` (the wordmark, extracted from the outro) and
 `fonts/` (Poppins, OFL-licensed).
@@ -47,7 +50,8 @@ port 3000, health check `/health`.
 
 The Slack app (<https://api.slack.com/apps>) needs:
 
-- **Bot scopes:** `channels:history`, `groups:history`, `chat:write`, `files:read`
+- **Bot scopes:** `channels:history`, `groups:history`, `chat:write`, `files:read`,
+  `files:write`
 - **Event Subscriptions** → `https://video-upload.agents.wxrks.app/slack/events`
 - **Interactivity** → `https://video-upload.agents.wxrks.app/slack/interactive`
 
