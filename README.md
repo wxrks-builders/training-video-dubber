@@ -24,6 +24,22 @@ a filename-derived title.
 Circle's Admin V2 API has no quiz endpoints, so drafted quiz questions are posted back
 to the Slack thread to be pasted in by hand.
 
+## Thumbnails
+
+Rendered at 1280x720 by [src/thumbnail.py](src/thumbnail.py): black canvas, emerald
+radial glow rising from the bottom-left corner with a faint grid inside it, a glassy
+3D icon, thin-line outline glyphs, a mixed-weight headline (bold white + extra-light
+gray on one line), an extra-light subline, an arrow cue and the wxrks wordmark.
+
+The headline, subline and icon subject all come from the same copy step as the title
+([src/describe.py](src/describe.py)); asterisks in the headline mark the words set in
+bold. The icon is generated per video with `gpt-image-1`
+([src/icon.py](src/icon.py)) on a transparent background. If `OPENAI_API_KEY` is unset
+or generation fails, a built-in glass shape is used and the video still publishes.
+
+Assets live in `assets/` — `logo.png` (the wordmark, extracted from the outro) and
+`fonts/` (Poppins, OFL-licensed).
+
 ## Deployment
 
 Runs on Coolify at <https://video-upload.agents.wxrks.app> — Dockerfile build pack,

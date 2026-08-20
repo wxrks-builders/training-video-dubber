@@ -27,7 +27,9 @@ def generate_video_copy(
     summary written by the person who posted it (used when the video is silent).
     Either way the same recipe produces the title, description and thumbnail text.
 
-    Returns {'title': ..., 'description': ..., 'thumbnail_text': ...}.
+    Returns title, description, thumbnail_headline (with *asterisks* marking the
+    words to set bold), thumbnail_subline, and icon_subject for the thumbnail
+    illustration.
     The source is truncated because titles and descriptions are decided in the
     first few minutes, and the whole thing is needlessly expensive for Haiku.
     """
@@ -55,7 +57,7 @@ def generate_video_copy(
         },
         json={
             "model": _MODEL,
-            "max_tokens": 500,
+            "max_tokens": 700,
             "messages": [{
                 "role": "user",
                 "content": (
@@ -63,15 +65,23 @@ def generate_video_copy(
                     f"{excerpt}\n\n"
                     f"{hint}"
                     'The company name is always written in lowercase as "wxrks" — never "Works".\n\n'
-                    "Respond with a JSON object containing exactly three keys:\n"
+                    "Respond with a JSON object containing exactly five keys:\n"
                     '1. "title": An English video title describing what this video actually '
                     "teaches. Under 70 characters, no clickbait, no quotes around it.\n"
                     '2. "description": Two short lines for the YouTube video description. '
                     "Line 1 states what the viewer will learn, based on the text above. "
                     "Line 2 mentions wxrks and links to community.wxrks.com. "
                     "Total under 200 characters.\n"
-                    '3. "thumbnail_text": 1 to 4 words (ALL CAPS) that capture the core '
-                    "topic — punchy enough to stand alone on a dark YouTube thumbnail.\n\n"
+                    '3. "thumbnail_headline": 3 to 6 words in sentence case for the '
+                    "thumbnail. Wrap the 1-3 most important words in asterisks to mark "
+                    'them for bold, e.g. "*Bulk import* glossary terms". Not all caps.\n'
+                    '4. "thumbnail_subline": one short supporting line for the thumbnail, '
+                    "under 60 characters, sentence case, no full stop.\n"
+                    '5. "icon_subject": a single concrete object or simple visual metaphor '
+                    "for this video, described in under 12 words, that an illustrator could "
+                    'draw as one icon — e.g. "a funnel filtering documents into a neat stack". '
+                    "No text or letters in it, no people, and do not mention colours — "
+                    "the icon is always rendered in the brand's greens.\n\n"
                     "Return ONLY the JSON object, no markdown or explanation."
                 ),
             }],
@@ -86,5 +96,9 @@ def generate_video_copy(
     return {
         "title": _enforce_company_name(copy.get("title", "").strip()),
         "description": _enforce_company_name(copy.get("description", "").strip()),
-        "thumbnail_text": _enforce_company_name(copy.get("thumbnail_text", "").strip()),
+        "thumbnail_headline": _enforce_company_name(
+            copy.get("thumbnail_headline", "").strip()),
+        "thumbnail_subline": _enforce_company_name(
+            copy.get("thumbnail_subline", "").strip()),
+        "icon_subject": copy.get("icon_subject", "").strip(),
     }

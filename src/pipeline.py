@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 
 from src import circle
 from src.describe import generate_video_copy
+from src.icon import generate_icon
 from src.download_loom import download_loom
 from src.download_slack import download_slack_file
 from src.elevenlabs_dub import (
@@ -103,6 +104,7 @@ def run_pipeline(
     yt_client_secret = os.environ.get("YOUTUBE_CLIENT_SECRET")
     yt_refresh_token = os.environ.get("YOUTUBE_REFRESH_TOKEN")
     yt_playlist_id  = os.environ.get("YOUTUBE_PLAYLIST_ID") or None
+    openai_key      = os.environ.get("OPENAI_API_KEY")
 
     # ── 1. Download ───────────────────────────────────────────────────────────
     log("[1/8] Downloading source video ...")
@@ -195,12 +197,15 @@ def run_pipeline(
         # A bad source shouldn't sink the publish — fall back to the filename.
         log(f"      Copy generation failed ({exc}); falling back to the filename.")
         title = translate_title(video["stem"], anthropic_key)
-        copy = {"description": title, "thumbnail_text": title}
+        copy = {}
     description = copy.get("description") or title
-    thumbnail_text = copy.get("thumbnail_text") or title
+    thumbnail_headline = copy.get("thumbnail_headline") or title
+    thumbnail_subline = copy.get("thumbnail_subline") or ""
+    icon_subject = copy.get("icon_subject") or ""
     log(f"      Title : {title}")
     log(f"      Desc  : {description!r}")
-    log(f"      Thumb : {thumbnail_text!r}")
+    log(f"      Thumb : {thumbnail_headline!r} / {thumbnail_subline!r}")
+    log(f"      Icon  : {icon_subject!r}")
 
     # ── 7. Upload to Vimeo ────────────────────────────────────────────────────
     log("[7/8] Uploading to Vimeo ...")
@@ -250,8 +255,26 @@ def run_pipeline(
     try:
         if yt_client_id and yt_client_secret and yt_refresh_token:
             log("[8/8] Generating thumbnail and uploading to YouTube ...")
+
+            # A missing icon costs the thumbnail its subject, not the publish.
+            icon_path = None
+            if openai_key and icon_subject:
+                try:
+                    icon_path = generate_icon(
+                        icon_subject, openai_key,
+                        str(Path("dubbed") / f"{video['stem']}_icon.png"),
+                    )
+                    log(f"      Icon: {icon_path}")
+                except Exception as exc:
+                    log(f"      Icon generation failed ({exc}); using the default shape.")
+            elif not openai_key:
+                log("      OPENAI_API_KEY not set — using the default icon shape.")
+
             thumbnail_path = str(Path("dubbed") / f"{video['stem']}_thumb.jpg")
-            generate_thumbnail(thumbnail_text, thumbnail_path)
+            generate_thumbnail(
+                thumbnail_headline, thumbnail_path,
+                subline=thumbnail_subline, icon_path=icon_path,
+            )
             log(f"      Thumbnail: {thumbnail_path}")
             # Standalone videos are regular uploads — never added to a course playlist.
             playlist_id = _playlist_for(circle_space_id, yt_playlist_id) if series else None
