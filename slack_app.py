@@ -35,6 +35,11 @@ PENDING_LOCK = threading.Lock()
 DESCRIBE_WAITS = {}
 DESCRIBE_TIMEOUT_SECS = 30 * 60
 
+# Pipelines paused on a thumbnail choice.
+# job_id -> {"event": threading.Event(), "index": int | None}
+THUMB_WAITS = {}
+THUMB_TIMEOUT_SECS = 30 * 60
+
 QUESTIONS = [
     ("dub",    "1️⃣  Dub it PT-BR → EN?",        [("Yes", "yes"), ("No, already English", "no")]),
     ("series", "2️⃣  Part of a training series?", [("Yes", "yes"), ("No, standalone", "no")]),
@@ -255,6 +260,87 @@ def _describe_modal(job_id: str) -> dict:
     }
 
 
+# ── Uploading images to a thread ──────────────────────────────────────────────
+
+def _upload_image(path: str, channel: str, thread_ts: str, comment: str) -> bool:
+    """
+    Slack's external upload flow: reserve a URL, PUT the bytes, then complete it
+    into the thread. Needs the files:write scope.
+    """
+    size = os.path.getsize(path)
+    r = requests.get(
+        "https://slack.com/api/files.getUploadURLExternal",
+        headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
+        params={"filename": os.path.basename(path), "length": size},
+        timeout=20,
+    ).json()
+    if not r.get("ok"):
+        print(f"      Slack upload URL failed: {r.get('error')}")
+        return False
+
+    with open(path, "rb") as fh:
+        up = requests.post(r["upload_url"], files={"file": fh}, timeout=180)
+    if not up.ok:
+        print(f"      Slack file PUT failed: {up.status_code}")
+        return False
+
+    done = requests.post(
+        "https://slack.com/api/files.completeUploadExternal",
+        headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}",
+                 "Content-Type": "application/json"},
+        json={"files": [{"id": r["file_id"], "title": "Thumbnail options"}],
+              "channel_id": channel, "thread_ts": thread_ts,
+              "initial_comment": comment},
+        timeout=30,
+    ).json()
+    if not done.get("ok"):
+        print(f"      Slack upload completion failed: {done.get('error')}")
+        return False
+    return True
+
+
+# ── Choosing between thumbnail variants ───────────────────────────────────────
+
+def _choose_thumbnail(job: dict, sheet_path: str, count: int) -> int:
+    """
+    Show the candidates and block until one is picked. Returns a 0-based index,
+    defaulting to the first if nobody picks — every option is publishable, so a
+    forgotten thread shouldn't hold up the video.
+    """
+    job_id = job["id"]
+    wait = {"event": threading.Event(), "index": None}
+    THUMB_WAITS[job_id] = wait
+
+    uploaded = _upload_image(
+        sheet_path, job["channel"], job["thread_ts"],
+        ":frame_with_picture: Pick a thumbnail — I'll use *1* if nobody picks within 30 minutes.",
+    )
+    if not uploaded:
+        # Without the image there is nothing to choose between.
+        THUMB_WAITS.pop(job_id, None)
+        return 0
+
+    _post(
+        job["channel"], job["thread_ts"], "Pick a thumbnail",
+        [{"type": "actions", "elements": [{
+            "type": "button",
+            "text": {"type": "plain_text", "text": str(i + 1)},
+            "value": str(i),
+            "action_id": f"{job_id}|thumb|{i}",
+        } for i in range(count)]}],
+    )
+
+    if not wait["event"].wait(timeout=THUMB_TIMEOUT_SECS):
+        THUMB_WAITS.pop(job_id, None)
+        _post(job["channel"], job["thread_ts"], "No pick after 30 minutes — using *1*.")
+        return 0
+
+    THUMB_WAITS.pop(job_id, None)
+    chosen = wait["index"] or 0
+    _post(job["channel"], job["thread_ts"], f"Using thumbnail *{chosen + 1}*.")
+    return chosen
+
+
 # ── Background worker ─────────────────────────────────────────────────────────
 
 def _process(job: dict) -> None:
@@ -282,6 +368,7 @@ def _process(job: dict) -> None:
                 circle_section_id=job.get("section_id"),
                 draft_quiz=answers.get("quiz") == "yes",
                 ask_description=lambda: _ask_description(job),
+                choose_thumbnail=lambda sheet, n: _choose_thumbnail(job, sheet, n),
             )
             errors = result.get("errors") or []
             icon = "⚠️" if errors else "✅"
@@ -443,6 +530,19 @@ def _handle_view_submission(payload: dict) -> dict:
 def _handle_action(payload: dict) -> None:
     action = payload["actions"][0]
     job_id, key, _ = action["action_id"].split("|", 2)
+
+    # The pipeline is mid-run by now, so this job is no longer in PENDING —
+    # it has to be answered before the lookup below.
+    if key == "thumb":
+        wait = THUMB_WAITS.get(job_id)
+        if wait is None:
+            _post(payload["channel"]["id"],
+                  payload["message"].get("thread_ts") or payload["message"]["ts"],
+                  "That thumbnail choice is no longer open.")
+            return
+        wait["index"] = int(action["value"])
+        wait["event"].set()
+        return
 
     with PENDING_LOCK:
         job = PENDING.get(job_id)
