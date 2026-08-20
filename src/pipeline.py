@@ -169,51 +169,65 @@ def run_pipeline(
 
     # ── 8a. Circle: a course lesson, or a standalone post ─────────────────────
     circle_url = None
-    if not circle_token:
-        log("[8/8] CIRCLE_API_TOKEN not set — skipping Circle.")
-    elif series:
-        log("[8/8] Creating lesson in Circle ...")
-        lesson = circle.create_lesson(
-            title,
-            vimeo_url,
-            circle_token,
-            space_id=circle_space_id or circle.DEFAULT_SPACE_ID,
-            section_id=circle_section_id or circle.DEFAULT_SECTION_ID,
-        )
-        circle_url = circle.lesson_url(lesson)
-        log(f"      Lesson: {circle_url}")
-    elif circle_space_id:
-        log("[8/8] Creating post in Circle ...")
-        post = circle.create_post(
-            title, description, vimeo_url, circle_token, space_id=circle_space_id
-        )
-        circle_url = circle.post_url(post)
-        log(f"      Post  : {circle_url}")
-    else:
-        log("[8/8] No Circle space selected — skipping Circle.")
+    errors = []
+    try:
+        if not circle_token:
+            log("[8/8] CIRCLE_API_TOKEN not set — skipping Circle.")
+        elif series:
+            log("[8/8] Creating lesson in Circle ...")
+            lesson = circle.create_lesson(
+                title,
+                vimeo_url,
+                circle_token,
+                space_id=circle_space_id or circle.DEFAULT_SPACE_ID,
+                section_id=circle_section_id or circle.DEFAULT_SECTION_ID,
+            )
+            circle_url = circle.lesson_url(lesson)
+            log(f"      Lesson: {circle_url}")
+        elif circle_space_id:
+            log("[8/8] Creating post in Circle ...")
+            post = circle.create_post(
+                title, description, vimeo_url, circle_token, space_id=circle_space_id
+            )
+            circle_url = circle.post_url(post)
+            log(f"      Post  : {circle_url}")
+        else:
+            log("[8/8] No Circle space selected — skipping Circle.")
+    except Exception as exc:
+        # The video is already on Vimeo; report the failure but keep the links.
+        log(f"      Circle failed: {exc}")
+        errors.append(f"Circle: {exc}")
 
     # ── 8b. YouTube upload ────────────────────────────────────────────────────
     youtube_url = None
-    if yt_client_id and yt_client_secret and yt_refresh_token:
-        log("[8/8] Generating thumbnail and uploading to YouTube ...")
-        thumbnail_path = str(Path("dubbed") / f"{video['stem']}_thumb.jpg")
-        generate_thumbnail(thumbnail_text, thumbnail_path)
-        log(f"      Thumbnail: {thumbnail_path}")
-        # Standalone videos are regular uploads — never added to a course playlist.
-        playlist_id = _playlist_for(circle_space_id, yt_playlist_id) if series else None
-        youtube_url = upload_to_youtube(
-            file_path=output_path,
-            title=title,
-            description=description,
-            thumbnail_path=thumbnail_path,
-            client_id=yt_client_id,
-            client_secret=yt_client_secret,
-            refresh_token=yt_refresh_token,
-            playlist_id=playlist_id,
-        )
-        log(f"      YouTube: {youtube_url}")
-    else:
-        log("[8/8] YOUTUBE_* env vars not set — skipping YouTube upload.")
+    try:
+        if yt_client_id and yt_client_secret and yt_refresh_token:
+            log("[8/8] Generating thumbnail and uploading to YouTube ...")
+            thumbnail_path = str(Path("dubbed") / f"{video['stem']}_thumb.jpg")
+            generate_thumbnail(thumbnail_text, thumbnail_path)
+            log(f"      Thumbnail: {thumbnail_path}")
+            # Standalone videos are regular uploads — never added to a course playlist.
+            playlist_id = _playlist_for(circle_space_id, yt_playlist_id) if series else None
+            youtube_url = upload_to_youtube(
+                file_path=output_path,
+                title=title,
+                description=description,
+                thumbnail_path=thumbnail_path,
+                client_id=yt_client_id,
+                client_secret=yt_client_secret,
+                refresh_token=yt_refresh_token,
+                playlist_id=playlist_id,
+            )
+            log(f"      YouTube: {youtube_url}")
+        else:
+            log("[8/8] YOUTUBE_* env vars not set — skipping YouTube upload.")
+    except Exception as exc:
+        log(f"      YouTube failed: {exc}")
+        hint = ""
+        if "invalid_grant" in str(exc):
+            hint = (" — the refresh token is expired or revoked; re-run "
+                    "`python3 scripts/youtube_auth.py`")
+        errors.append(f"YouTube: {exc}{hint}")
 
     # ── 9. Quiz questions (Circle has no quiz API — these go back to Slack) ───
     quiz_questions = None
@@ -233,4 +247,5 @@ def run_pipeline(
         "lesson_url": circle_url,
         "youtube_url": youtube_url,
         "quiz_questions": quiz_questions,
+        "errors": errors,
     }

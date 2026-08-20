@@ -5,7 +5,7 @@ Run once locally:
     python3 scripts/youtube_auth.py
 
 It will open a browser for Google login, then print the three values
-you need to add to Render's environment variables (and your local .env).
+you need to add to Coolify's environment variables (and your local .env).
 
 Requirements:
     pip install google-auth-oauthlib
@@ -57,7 +57,7 @@ else:
 creds = flow.run_local_server(port=0, open_browser=True)
 
 print("\n✅  Authentication successful!\n")
-print("Add these to your .env file AND to Render's environment variables:\n")
+print("Add these to your .env file AND to Coolify's environment variables:\n")
 print(f"YOUTUBE_CLIENT_ID={creds.client_id}")
 print(f"YOUTUBE_CLIENT_SECRET={creds.client_secret}")
 print(f"YOUTUBE_REFRESH_TOKEN={creds.refresh_token}")

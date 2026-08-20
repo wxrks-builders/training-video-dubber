@@ -216,11 +216,16 @@ def _process(job: dict) -> None:
                 circle_section_id=job.get("section_id"),
                 draft_quiz=answers.get("quiz") == "yes",
             )
-            lines = [f"✅ {prefix}*{result['title']}*", f"Vimeo: {result['vimeo_url']}"]
+            errors = result.get("errors") or []
+            icon = "⚠️" if errors else "✅"
+            lines = [f"{icon} {prefix}*{result['title']}*", f"Vimeo: {result['vimeo_url']}"]
             if result.get("youtube_url"):
                 lines.append(f"YouTube: {result['youtube_url']}")
             if result.get("circle_url"):
                 lines.append(f"Circle: {result['circle_url']}")
+            # Partial failures still report whatever did publish.
+            for err in errors:
+                lines.append(f"❌ {err}")
             _post(channel, thread_ts, "\n".join(lines))
 
             if result.get("quiz_questions"):
