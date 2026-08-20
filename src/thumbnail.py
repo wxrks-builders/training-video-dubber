@@ -7,6 +7,7 @@ the theme, a mixed-weight headline (bold white + extra-light gray on one line),
 an extra-light subline, an arrow cue, and the wxrks wordmark. Generous margins.
 """
 
+import io
 import os
 from pathlib import Path
 
@@ -245,9 +246,78 @@ def _draw_arrow(draw) -> None:
     draw.line([(x + ln - 13, y + 10), (x + ln, y)], fill=(120, 210, 178), width=2)
 
 
+# ── The brand style registry ──────────────────────────────────────────────────
+#
+# Same composition as below, but drawn by styles.agents.wxrks.app, which owns
+# the palette and the real brand faces. Preferred because it is the one place
+# the look is decided: change a colour in Notion and every app follows,
+# including this one. The local renderer stays as the fallback so a registry
+# outage can never block a publish.
+#
+# Two things differ from the local version and are deliberate: the type is
+# Montserrat, the registered brand text face that the bold/extra-light
+# headline signature actually is, rather than Poppins; and the greens are the
+# registry's rather than Tailwind's emerald-500.
+
+REGISTRY_TIMEOUT = 90  # a cold Chromium launch on the far side takes a moment
+
+
+def _render_via_registry(headline, output_path, subline, icon_path) -> str:
+    """Ask the registry to draw it. Raises on any failure."""
+    import base64
+
+    import requests
+
+    base = os.environ.get("STYLE_REGISTRY_URL", "").rstrip("/")
+    token = os.environ.get("STYLE_REGISTRY_TOKEN", "")
+    if not (base and token):
+        raise RuntimeError("STYLE_REGISTRY_URL / STYLE_REGISTRY_TOKEN not set")
+
+    payload = {
+        "headline": headline,
+        "subline": subline or "",
+        "style": os.environ.get("THUMBNAIL_STYLE", "youtube-deck"),
+    }
+    if icon_path and os.path.exists(icon_path):
+        with open(icon_path, "rb") as fh:
+            payload["icon_base64"] = base64.b64encode(fh.read()).decode()
+
+    response = requests.post(
+        f"{base}/v1/render/thumbnail",
+        headers={"Authorization": f"Bearer {token}"},
+        json=payload, timeout=REGISTRY_TIMEOUT)
+    if response.status_code != 200:
+        raise RuntimeError(f"registry returned {response.status_code}: "
+                           f"{response.text[:200]}")
+
+    # The registry renders PNG; youtube_upload declares image/jpeg, so convert
+    # here rather than changing what the upload claims to be sending.
+    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+    Image.open(io.BytesIO(response.content)).convert("RGB").save(
+        output_path, "JPEG", quality=94)
+    return output_path
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def generate_thumbnail(
+    headline: str,
+    output_path: str,
+    subline: str = "",
+    icon_path: str = None,
+    log=print,
+) -> str:
+    try:
+        path = _render_via_registry(headline, output_path, subline, icon_path)
+        log("      Thumbnail: drawn by the brand style registry")
+        return path
+    except Exception as exc:
+        log(f"      Thumbnail: registry unavailable ({exc}); "
+            "drawing it locally")
+    return render_locally(headline, output_path, subline, icon_path)
+
+
+def render_locally(
     headline: str,
     output_path: str,
     subline: str = "",
