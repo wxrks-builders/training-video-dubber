@@ -16,3 +16,15 @@ services:
         sync: false
       - key: VIMEO_FOLDER_ID
         sync: false
+      - key: CIRCLE_API_TOKEN
+        sync: false
+      - key: YOUTUBE_CLIENT_ID
+        sync: false
+      - key: YOUTUBE_CLIENT_SECRET
+        sync: false
+      - key: YOUTUBE_REFRESH_TOKEN
+        sync: false
+      - key: YOUTUBE_PLAYLIST_ID
+        sync: false
+      - key: YOUTUBE_PLAYLIST_MAP
+        sync: false
