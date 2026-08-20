@@ -14,20 +14,37 @@ def _enforce_company_name(text: str) -> str:
     return re.sub(r"\bworks\b", _COMPANY_NAME, text, flags=re.IGNORECASE)
 
 
-def generate_video_copy(transcript: str, api_key: str, filename_hint: str = None) -> dict:
+def generate_video_copy(
+    source_text: str,
+    api_key: str,
+    filename_hint: str = None,
+    source_kind: str = "transcript",
+) -> dict:
     """
-    Derive publishing copy from what the video actually says.
+    Derive publishing copy from what the video is about.
+
+    source_kind is "transcript" for what the video says, or "description" for a
+    summary written by the person who posted it (used when the video is silent).
+    Either way the same recipe produces the title, description and thumbnail text.
 
     Returns {'title': ..., 'description': ..., 'thumbnail_text': ...}.
-    The transcript is truncated because titles and descriptions are decided in the
+    The source is truncated because titles and descriptions are decided in the
     first few minutes, and the whole thing is needlessly expensive for Haiku.
     """
-    excerpt = (transcript or "").strip()[:12000]
+    excerpt = (source_text or "").strip()[:12000]
     hint = (
         f'The uploaded file was named "{filename_hint}" — useful only if it looks '
         "descriptive, ignore it if it is a generic recording name.\n\n"
         if filename_hint else ""
     )
+
+    if source_kind == "description":
+        preamble = (
+            "This is a training video from wxrks. It has no narration, so the "
+            "person who recorded it described what it covers:"
+        )
+    else:
+        preamble = "Here is the transcript of a training video from wxrks:"
 
     r = requests.post(
         _ANTHROPIC_API,
@@ -42,7 +59,7 @@ def generate_video_copy(transcript: str, api_key: str, filename_hint: str = None
             "messages": [{
                 "role": "user",
                 "content": (
-                    "Here is the transcript of a training video from wxrks:\n\n"
+                    f"{preamble}\n\n"
                     f"{excerpt}\n\n"
                     f"{hint}"
                     'The company name is always written in lowercase as "wxrks" — never "Works".\n\n'
@@ -50,7 +67,7 @@ def generate_video_copy(transcript: str, api_key: str, filename_hint: str = None
                     '1. "title": An English video title describing what this video actually '
                     "teaches. Under 70 characters, no clickbait, no quotes around it.\n"
                     '2. "description": Two short lines for the YouTube video description. '
-                    "Line 1 states what the viewer will learn, based on the transcript. "
+                    "Line 1 states what the viewer will learn, based on the text above. "
                     "Line 2 mentions wxrks and links to community.wxrks.com. "
                     "Total under 200 characters.\n"
                     '3. "thumbnail_text": 1 to 4 words (ALL CAPS) that capture the core '

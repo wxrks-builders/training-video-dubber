@@ -15,6 +15,12 @@ asks four questions in-thread, then runs the matching pipeline:
 Title, description and thumbnail text are always generated from the video's transcript.
 Dubbed videos reuse the ElevenLabs SRT; English videos are transcribed with Scribe.
 
+Silent videos — a screen recording with no narration, or one with the mic muted —
+have no transcript to work from, so the bot asks the person who posted it what the
+video covers and runs that answer through the same recipe. Nothing is published
+until they answer; after 30 minutes the job is abandoned rather than published under
+a filename-derived title.
+
 Circle's Admin V2 API has no quiz endpoints, so drafted quiz questions are posted back
 to the Slack thread to be pasted in by hand.
 

@@ -30,6 +30,11 @@ SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET", "")
 PENDING = {}
 PENDING_LOCK = threading.Lock()
 
+# Pipelines paused waiting for someone to describe a silent video.
+# job_id -> {"event": threading.Event(), "text": str | None}
+DESCRIBE_WAITS = {}
+DESCRIBE_TIMEOUT_SECS = 30 * 60
+
 QUESTIONS = [
     ("dub",    "1️⃣  Dub it PT-BR → EN?",        [("Yes", "yes"), ("No, already English", "no")]),
     ("series", "2️⃣  Part of a training series?", [("Yes", "yes"), ("No, standalone", "no")]),
@@ -189,6 +194,67 @@ def _destination_options(token: str, series: bool) -> list:
     return options
 
 
+# ── Asking for a description of a silent video ────────────────────────────────
+
+def _ask_description(job: dict) -> str:
+    """
+    Post a button, open a form when it's clicked, and block the pipeline thread
+    until it's submitted. Returns the text, or None if nobody answered in time.
+    """
+    job_id = job["id"]
+    wait = {"event": threading.Event(), "text": None}
+    DESCRIBE_WAITS[job_id] = wait
+
+    _post(
+        job["channel"], job["thread_ts"],
+        "This video has no narration — tell me what it covers.",
+        [
+            {"type": "section", "text": {"type": "mrkdwn", "text":
+                ":warning: This video has no narration, so I can't write a title from it.\n"
+                "Tell me what it covers and I'll generate the title, description and "
+                "thumbnail from that."}},
+            {"type": "actions", "elements": [{
+                "type": "button",
+                "style": "primary",
+                "text": {"type": "plain_text", "text": "Describe this video"},
+                "action_id": f"{job_id}|describe|open",
+            }]},
+        ],
+    )
+
+    answered = wait["event"].wait(timeout=DESCRIBE_TIMEOUT_SECS)
+    DESCRIBE_WAITS.pop(job_id, None)
+    if not answered:
+        return None
+    _post(job["channel"], job["thread_ts"], f"📝 Got it: _{wait['text']}_")
+    return wait["text"]
+
+
+def _describe_modal(job_id: str) -> dict:
+    return {
+        "type": "modal",
+        "callback_id": "describe_video",
+        "private_metadata": job_id,
+        "title": {"type": "plain_text", "text": "Describe this video"},
+        "submit": {"type": "plain_text", "text": "Publish"},
+        "blocks": [{
+            "type": "input",
+            "block_id": "desc",
+            "label": {"type": "plain_text", "text": "What is this video about?"},
+            "hint": {"type": "plain_text", "text":
+                     "A couple of sentences is plenty — what it shows and who it's for."},
+            "element": {
+                "type": "plain_text_input",
+                "action_id": "value",
+                "multiline": True,
+                "placeholder": {"type": "plain_text", "text":
+                                "e.g. A walkthrough of the new project dashboard, "
+                                "showing how to filter and export tasks."},
+            },
+        }],
+    }
+
+
 # ── Background worker ─────────────────────────────────────────────────────────
 
 def _process(job: dict) -> None:
@@ -215,6 +281,7 @@ def _process(job: dict) -> None:
                 circle_space_id=job.get("space_id"),
                 circle_section_id=job.get("section_id"),
                 draft_quiz=answers.get("quiz") == "yes",
+                ask_description=lambda: _ask_description(job),
             )
             errors = result.get("errors") or []
             icon = "⚠️" if errors else "✅"
@@ -240,6 +307,7 @@ def _process(job: dict) -> None:
 def _start_job(sources: list, label: str, channel: str, thread_ts: str) -> None:
     job_id = uuid.uuid4().hex[:12]
     job = {
+        "id": job_id,
         "sources": sources,
         "label": label,
         "channel": channel,
@@ -333,11 +401,43 @@ def slack_interactive():
         return "Unauthorized", 401
 
     payload = json.loads(request.form["payload"])
-    if payload.get("type") == "block_actions":
+    ptype = payload.get("type")
+
+    if ptype == "view_submission":
+        return jsonify(_handle_view_submission(payload))
+
+    if ptype == "block_actions":
+        action = payload["actions"][0]
+        parts = action["action_id"].split("|", 2)
+        # A trigger_id is only valid for 3 s, so opening the form can't wait on a
+        # background thread the way the other actions do.
+        if len(parts) > 1 and parts[1] == "describe":
+            _api("views.open", {"trigger_id": payload["trigger_id"],
+                                "view": _describe_modal(parts[0])})
+            return "", 200
         # Rebuilding question 4 hits the Circle API; Slack only waits 3 s for this
         # response, so acknowledge now and do the work in the background.
         threading.Thread(target=_handle_action, args=(payload,), daemon=True).start()
     return "", 200
+
+
+def _handle_view_submission(payload: dict) -> dict:
+    """An empty body closes the modal; response_action errors keeps it open."""
+    view = payload["view"]
+    if view.get("callback_id") != "describe_video":
+        return {}
+
+    job_id = view["private_metadata"]
+    text = (view["state"]["values"]["desc"]["value"]["value"] or "").strip()
+
+    wait = DESCRIBE_WAITS.get(job_id)
+    if wait is None:
+        return {"response_action": "errors", "errors": {
+            "desc": "This request timed out — please re-post the video."}}
+
+    wait["text"] = text
+    wait["event"].set()
+    return {}
 
 
 def _handle_action(payload: dict) -> None:

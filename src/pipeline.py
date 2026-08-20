@@ -19,10 +19,15 @@ from src.elevenlabs_dub import (
 from src.outro import append_outro
 from src.quiz import draft_quiz_questions
 from src.thumbnail import generate_thumbnail
-from src.transcribe import transcribe_video
+from src.transcribe import has_usable_audio, transcribe_video
 from src.translate_title import translate_title
 from src.vimeo_upload import upload_to_vimeo
 from src.youtube_upload import upload_to_youtube
+
+
+# Below this, a transcript is too thin to write a title from — an empty string,
+# or a stray word Scribe picked out of room noise.
+MIN_TRANSCRIPT_CHARS = 40
 
 
 def _playlist_for(space_id, default_playlist_id):
@@ -64,6 +69,7 @@ def run_pipeline(
     circle_space_id: int = None,
     circle_section_id: int = None,
     draft_quiz: bool = False,
+    ask_description=None,
     log=print,
 ) -> dict:
     """
@@ -76,6 +82,10 @@ def run_pipeline(
                       playlist. Otherwise it becomes a standalone Circle *post*
                       and an unlisted-from-any-playlist YouTube video.
     draft_quiz      — draft quiz questions from the transcript and return them
+    ask_description — callable returning a written summary of the video, used
+                      when it has no narration to generate copy from. Returning
+                      None (or omitting it) aborts rather than publishing a
+                      video titled after its filename.
     """
     load_dotenv()
 
@@ -100,6 +110,11 @@ def run_pipeline(
     log(f"      Saved : {video['path']}")
 
     # ── 2-4. Dub (optional) ───────────────────────────────────────────────────
+    audio_present = has_usable_audio(video["path"])
+    if dub and not audio_present:
+        log("      No audible narration in this video — nothing to dub.")
+        dub = False
+
     if dub:
         log("[2/8] Submitting to ElevenLabs (PT-BR → EN) ...")
         dubbing_id = create_basic_dub(
@@ -115,16 +130,25 @@ def run_pipeline(
         segments = parse_srt(srt_text)
         groups = group_segments(segments)
         log(f"      {len(groups)} speech groups found.")
+        if not groups:
+            # Belt and braces: the loudness check above should have caught this.
+            raise RuntimeError("ElevenLabs found no speech in this video to dub.")
         # The dubbing SRT doubles as the transcript — no extra transcription call.
         transcript = " ".join(text for _, _, text in groups)
         dubbed_path = str(Path("dubbed") / f"{video['stem']}_dubbed.mp4")
         build_dubbed_video(video["path"], groups, api_key, dubbed_path)
         processed_path = dubbed_path
-    else:
+    elif audio_present:
         log("[2/8] Already in English — skipping dubbing.")
         log("[3/8] Transcribing audio with ElevenLabs Scribe ...")
         transcript = transcribe_video(video["path"], api_key, language_code="eng")
         log(f"      {len(transcript)} characters transcribed.")
+        log("[4/8] Using the source video as-is.")
+        processed_path = video["path"]
+    else:
+        log("[2/8] No audible narration — skipping dubbing.")
+        log("[3/8] Nothing to transcribe.")
+        transcript = ""
         log("[4/8] Using the source video as-is.")
         processed_path = video["path"]
 
@@ -139,14 +163,37 @@ def run_pipeline(
     else:
         log(f"[5/8] No outro at {outro_path!r}, skipping.")
 
-    # ── 6. Title, description and thumbnail text from the transcript ──────────
+    # ── 6. Title, description and thumbnail text ──────────────────────────────
+    # A silent screen recording gives us nothing to write copy from, and the
+    # filename is usually "Screen Recording 2026-08-20 at 14.32.11". Ask instead.
+    source_text, source_kind = transcript, "transcript"
+    if len(transcript.strip()) < MIN_TRANSCRIPT_CHARS:
+        log("[6/8] No usable narration in this video.")
+        if ask_description is None:
+            raise RuntimeError(
+                "This video has no narration, so there is nothing to write a title "
+                "from. Re-run with a description (CLI: --description \"...\")."
+            )
+        log("      Asking for a written description ...")
+        written = ask_description()
+        if not (written or "").strip():
+            raise RuntimeError(
+                "This video has no narration and no description was provided, so "
+                "nothing was published. Re-post the video to try again."
+            )
+        source_text, source_kind = written.strip(), "description"
+        log(f"      Description: {source_text[:120]!r}")
+
     log("[6/8] Generating title, description and thumbnail text ...")
     try:
-        copy = generate_video_copy(transcript, anthropic_key, filename_hint=video["stem"])
+        copy = generate_video_copy(
+            source_text, anthropic_key,
+            filename_hint=video["stem"], source_kind=source_kind,
+        )
         title = copy["title"] or translate_title(video["stem"], anthropic_key)
     except Exception as exc:
-        # A bad transcript shouldn't sink the publish — fall back to the filename.
-        log(f"      Transcript-based copy failed ({exc}); falling back to the filename.")
+        # A bad source shouldn't sink the publish — fall back to the filename.
+        log(f"      Copy generation failed ({exc}); falling back to the filename.")
         title = translate_title(video["stem"], anthropic_key)
         copy = {"description": title, "thumbnail_text": title}
     description = copy.get("description") or title
@@ -234,7 +281,7 @@ def run_pipeline(
     if draft_quiz:
         log("      Drafting quiz questions from the transcript ...")
         try:
-            quiz_questions = draft_quiz_questions(transcript, title, anthropic_key)
+            quiz_questions = draft_quiz_questions(source_text, title, anthropic_key)
         except Exception as exc:
             log(f"      Quiz drafting failed ({exc}).")
 

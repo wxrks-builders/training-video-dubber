@@ -38,6 +38,9 @@ def main():
     parser.add_argument("--section-id", type=int, help="Circle course section ID")
     parser.add_argument("--quiz", action="store_true",
                         help="Draft quiz questions from the transcript")
+    parser.add_argument("--description",
+                        help="What the video is about. Required only for silent "
+                             "videos, where there is no narration to work from.")
     args = parser.parse_args()
 
     if args.file:
@@ -52,6 +55,7 @@ def main():
         circle_space_id=args.space_id,
         circle_section_id=args.section_id,
         draft_quiz=args.quiz,
+        ask_description=(lambda: args.description) if args.description else None,
     )
 
     print("\nDone!")
